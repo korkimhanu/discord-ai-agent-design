@@ -99,8 +99,9 @@ export class Worker {
       const message = error instanceof Error ? error.message : String(error);
       const failed = await this.store.updateJob(job.id, { status: "failed", error: message });
       await this.store.appendMessage(job.sessionKey, { role: "assistant", text: `Job ${job.id} failed during approval: ${message}` });
-      await this.updateProgress(failed, channel, failed.progressPercent ?? 62, `실패: ${message.slice(0, 80)}`);
-      await channel.send(`승인 후 작업 실패: ${message}`);
+      const friendly = friendlyError(message);
+      await this.updateProgress(failed, channel, failed.progressPercent ?? 62, `실패: ${friendly.slice(0, 80)}`);
+      await channel.send(`승인 후 작업 실패: ${friendly}`);
       throw error;
     }
   }
@@ -179,8 +180,9 @@ export class Worker {
       const message = error instanceof Error ? error.message : String(error);
       currentJob = await this.store.updateJob(job.id, { status: "failed", error: message });
       await this.store.appendMessage(job.sessionKey, { role: "assistant", text: `Job ${job.id} failed: ${message}` });
-      await this.updateProgress(currentJob, channel, currentJob.progressPercent ?? 0, `실패: ${message.slice(0, 80)}`);
-      await channel.send(`작업 실패: ${message}`);
+      const friendly = friendlyError(message);
+      await this.updateProgress(currentJob, channel, currentJob.progressPercent ?? 0, `실패: ${friendly.slice(0, 80)}`);
+      await channel.send(`작업 실패: ${friendly}`);
     }
   }
 
@@ -219,8 +221,9 @@ export class Worker {
       const message = error instanceof Error ? error.message : String(error);
       currentJob = await this.store.updateJob(job.id, { status: "failed", error: message });
       await this.store.appendMessage(job.sessionKey, { role: "assistant", text: `Analysis job ${job.id} failed: ${message}` });
-      await this.updateProgress(currentJob, channel, currentJob.progressPercent ?? 0, `실패: ${message.slice(0, 80)}`);
-      await channel.send(`분석 실패: ${message}`);
+      const friendly = friendlyError(message);
+      await this.updateProgress(currentJob, channel, currentJob.progressPercent ?? 0, `실패: ${friendly.slice(0, 80)}`);
+      await channel.send(`분석 실패: ${friendly}`);
     }
   }
 
@@ -317,7 +320,13 @@ export class Worker {
       void this.updateProgress(job, channel, percent, `${label}\n현재 실행: ${detail}\n경과: ${seconds}초`).catch(() => undefined);
     }, 10_000);
     try {
-      return await run(command, args, cwd, timeoutMs);
+      const result = await run(command, args, cwd, timeoutMs);
+      if (command === "git" && isDubiousOwnership(result.stderr || result.stdout)) {
+        await this.updateProgress(job, channel, percent, `${label}\nGit workspace trust 자동 복구 중`);
+        await markSafeDirectory(cwd);
+        return await run(command, args, cwd, timeoutMs);
+      }
+      return result;
     } finally {
       clearInterval(heartbeat);
     }
@@ -416,4 +425,24 @@ function summarizeDiff(diff: string): string {
   const additions = diff.match(/^\+/gm)?.length ?? 0;
   const deletions = diff.match(/^-/gm)?.length ?? 0;
   return `files=${files.slice(0, 8).join(", ") || "unknown"}, +${additions}, -${deletions}`;
+}
+
+function isDubiousOwnership(output: string): boolean {
+  return output.includes("detected dubious ownership");
+}
+
+function friendlyError(message: string): string {
+  if (message.includes("detected dubious ownership")) {
+    return "Git workspace 신뢰 오류가 발생했습니다. 새 작업부터는 자동 복구하도록 설정했습니다. 같은 요청을 새 job으로 다시 실행하세요.";
+  }
+  if (message.includes("corrupt patch") || message.includes("Agent produced an invalid patch")) {
+    return "에이전트가 적용 불가능한 변경안을 만들었습니다. 요청을 더 작게 나누거나 새 job으로 다시 실행하세요. CLI agent 작업은 이제 patch 재적용 없이 worktree를 직접 커밋하도록 개선했습니다.";
+  }
+  if (message.includes("credential") || message.includes("Authentication failed") || message.includes("could not read Username")) {
+    return "GitHub 인증 또는 push 권한 문제입니다. GITHUB_TOKEN 권한과 repo 접근 권한을 확인하세요. Git 명령은 이제 인증창에서 멈추지 않도록 비대화형으로 실행됩니다.";
+  }
+  if (message.includes("Command timed out") || message.includes("timed out")) {
+    return "명령 실행 시간이 초과됐습니다. 진행이 멈추지 않도록 timeout 처리했습니다. 같은 요청을 새 job으로 다시 실행하세요.";
+  }
+  return message.length > 1500 ? `${message.slice(0, 1500)}...` : message;
 }

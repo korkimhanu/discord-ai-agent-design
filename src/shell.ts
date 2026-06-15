@@ -22,7 +22,12 @@ export function run(
     const child = spawn(shell ? commandLine(command, args) : command, shell ? [] : args, {
       cwd,
       shell,
-      env: process.env
+      env: {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: "0",
+        GCM_INTERACTIVE: "Never",
+        GCM_MODAL_PROMPT: "false"
+      }
     });
     let stdout = "";
     let stderr = "";
