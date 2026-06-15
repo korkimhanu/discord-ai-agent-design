@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
+import { commandExists } from "./commands.js";
 import { config } from "./config.js";
 import { run } from "./shell.js";
 import type { ModelRequest, ModelResponse } from "./types.js";
@@ -7,7 +8,6 @@ import type { ModelRequest, ModelResponse } from "./types.js";
 type Provider = "openai" | "anthropic" | "codex-cli" | "claude-code";
 
 const modelProfiles: Record<string, { provider: Provider; model: string }> = {
-  auto: { provider: "openai", model: "gpt-5.1" },
   strong: { provider: "openai", model: "gpt-5.1" },
   balanced: { provider: "anthropic", model: "claude-sonnet-4-5-20250929" },
   cheap: { provider: "openai", model: "gpt-5.1-mini" },
@@ -26,7 +26,7 @@ export class ModelRouter {
   }
 
   async complete(request: ModelRequest): Promise<ModelResponse> {
-    const resolved = modelProfiles[request.model] ?? inferProvider(request.model);
+    const resolved = request.model === "auto" ? await this.resolveAuto() : modelProfiles[request.model] ?? inferProvider(request.model);
     if (resolved.provider === "codex-cli") return this.completeCodexCli(request);
     if (resolved.provider === "claude-code") return this.completeClaudeCode(request);
     if (resolved.provider === "anthropic") return this.completeAnthropic(resolved.model, request);
@@ -74,6 +74,14 @@ export class ModelRouter {
     });
     if (result.code !== 0) throw new Error(`claude-code failed\n${result.stderr || result.stdout}`);
     return { text: result.stdout.trim(), provider: "claude-code", model: "claude-code" };
+  }
+
+  private async resolveAuto(): Promise<{ provider: Provider; model: string }> {
+    if (await commandExists(config.codexCommand)) return { provider: "codex-cli", model: "codex" };
+    if (await commandExists(config.claudeCodeCommand)) return { provider: "claude-code", model: "claude-code" };
+    if (this.openai) return { provider: "openai", model: "gpt-5.1" };
+    if (this.anthropic) return { provider: "anthropic", model: "claude-sonnet-4-5-20250929" };
+    throw new Error("No model backend available. Install/login codex or claude, or set OPENAI_API_KEY/ANTHROPIC_API_KEY.");
   }
 }
 

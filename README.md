@@ -34,8 +34,8 @@ DISCORD_GUILD_ID=
 
 GITHUB_TOKEN=
 
-DEFAULT_MODEL=codex
-DEFAULT_AGENT=codex
+DEFAULT_MODEL=auto
+DEFAULT_AGENT=auto
 CLAUDE_CODE_COMMAND=claude
 CODEX_COMMAND=codex
 LOCAL_CHECKS=none
@@ -117,7 +117,7 @@ Discord에서 먼저 repo를 지정합니다.
 ```text
 /repo owner/repo
 /model auto
-/agent api
+/agent auto
 ```
 
 그 다음 봇을 멘션하거나, thread 안에서 자연어로 요청합니다.
@@ -232,7 +232,7 @@ codex
 auto
 ```
 
-현재 `auto` agent는 `api`와 동일하게 동작합니다. `claude-code`는 `claude -p`, `codex`는 `codex exec`를 호출하도록 되어 있습니다.
+`auto`는 실행 환경에 따라 자동 선택합니다. `claude-code`는 `claude -p`, `codex`는 `codex exec`를 호출합니다.
 
 ## API 없이 로그인으로 쓰기
 
@@ -248,8 +248,8 @@ codex login
 `.env`:
 
 ```env
-DEFAULT_MODEL=codex
-DEFAULT_AGENT=codex
+DEFAULT_MODEL=auto
+DEFAULT_AGENT=auto
 CODEX_COMMAND=codex
 ```
 
@@ -290,6 +290,21 @@ Discord:
 ```
 
 이 경우 일반 답변은 Codex CLI, repo 수정 diff 생성은 Claude Code CLI가 담당합니다.
+
+`/model auto`와 `/agent auto`의 선택 순서:
+
+```text
+model auto:
+1. codex CLI
+2. claude CLI
+3. OpenAI API
+4. Anthropic API
+
+agent auto:
+1. codex CLI
+2. claude CLI
+3. api agent
+```
 
 ## Synology NAS Docker
 

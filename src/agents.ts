@@ -1,4 +1,5 @@
 import { config } from "./config.js";
+import { commandExists } from "./commands.js";
 import { ModelRouter } from "./models.js";
 import { run } from "./shell.js";
 
@@ -21,8 +22,9 @@ export class AgentRouter {
   constructor(private readonly models: ModelRouter) {}
 
   async generateDiff(request: AgentRequest): Promise<AgentResponse> {
-    if (request.agent === "claude-code") return this.runClaudeCode(request);
-    if (request.agent === "codex") return this.runCodex(request);
+    const agent = request.agent === "auto" ? await this.resolveAutoAgent() : request.agent;
+    if (agent === "claude-code") return this.runClaudeCode(request);
+    if (agent === "codex") return this.runCodex(request);
     return this.runApi(request);
   }
 
@@ -53,6 +55,12 @@ export class AgentRouter {
     );
     if (result.code !== 0) throw new Error(`codex failed\n${result.stderr || result.stdout}`);
     return { text: result.stdout, source: "codex", mode: "worktree" };
+  }
+
+  private async resolveAutoAgent(): Promise<"codex" | "claude-code" | "api"> {
+    if (await commandExists(config.codexCommand)) return "codex";
+    if (await commandExists(config.claudeCodeCommand)) return "claude-code";
+    return "api";
   }
 }
 
