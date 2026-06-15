@@ -6,11 +6,22 @@ export type RunResult = {
   stderr: string;
 };
 
-export function run(command: string, args: string[], cwd: string, timeoutMs = 120_000): Promise<RunResult> {
+export type RunOptions = {
+  input?: string;
+};
+
+export function run(
+  command: string,
+  args: string[],
+  cwd: string,
+  timeoutMs = 120_000,
+  options: RunOptions = {}
+): Promise<RunResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    const shell = process.platform === "win32";
+    const child = spawn(shell ? commandLine(command, args) : command, shell ? [] : args, {
       cwd,
-      shell: process.platform === "win32",
+      shell,
       env: process.env
     });
     let stdout = "";
@@ -26,6 +37,9 @@ export function run(command: string, args: string[], cwd: string, timeoutMs = 12
     child.stderr.on("data", (chunk) => {
       stderr += chunk.toString();
     });
+    if (options.input) {
+      child.stdin.end(options.input);
+    }
     child.on("error", reject);
     child.on("close", (code) => {
       clearTimeout(timer);
@@ -38,4 +52,13 @@ export function assertOk(result: RunResult, label: string): void {
   if (result.code !== 0) {
     throw new Error(`${label} failed\n${result.stderr || result.stdout}`);
   }
+}
+
+function commandLine(command: string, args: string[]): string {
+  return [command, ...args].map(quoteForCmd).join(" ");
+}
+
+function quoteForCmd(value: string): string {
+  if (!/[ \t\n\r"&|<>^]/.test(value)) return value;
+  return `"${value.replace(/"/g, '\\"')}"`;
 }

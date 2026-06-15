@@ -61,13 +61,17 @@ export class ModelRouter {
   }
 
   private async completeCodexCli(request: ModelRequest): Promise<ModelResponse> {
-    const result = await run(config.codexCommand, ["exec", `${request.system}\n\n${request.prompt}`], process.cwd(), 600_000);
+    const result = await run(config.codexCommand, ["exec", "-"], process.cwd(), 600_000, {
+      input: `${request.system}\n\n${request.prompt}`
+    });
     if (result.code !== 0) throw new Error(`codex cli failed\n${result.stderr || result.stdout}`);
     return { text: result.stdout.trim(), provider: "codex-cli", model: "codex" };
   }
 
   private async completeClaudeCode(request: ModelRequest): Promise<ModelResponse> {
-    const result = await run(config.claudeCodeCommand, ["-p", `${request.system}\n\n${request.prompt}`], process.cwd(), 600_000);
+    const result = await run(config.claudeCodeCommand, ["-p"], process.cwd(), 600_000, {
+      input: `${request.system}\n\n${request.prompt}`
+    });
     if (result.code !== 0) throw new Error(`claude-code failed\n${result.stderr || result.stdout}`);
     return { text: result.stdout.trim(), provider: "claude-code", model: "claude-code" };
   }

@@ -49,43 +49,48 @@ export async function startBot(): Promise<void> {
   });
 
   client.on(Events.MessageCreate, async (message) => {
-    if (message.author.bot) return;
-    if (!shouldRespond(message, client.user?.id)) return;
-    const sessionKey = makeSessionKey(message);
-    const session = store.getSession(sessionKey);
-    const content = cleanMention(message.content, client.user?.id).trim();
-    if (!content) return;
-    if (!session.repo && looksLikeCodingRequest(content)) {
-      await message.reply("먼저 `/repo owner/name`으로 작업할 GitHub repo를 설정하세요.");
-      return;
-    }
-    if (looksLikeCodingRequest(content) && session.repo) {
-      const now = new Date().toISOString();
-      const job: Job = {
-        id: crypto.randomBytes(4).toString("hex"),
-        sessionKey,
-        channelId: message.channelId,
-        threadId: message.channel.isThread() ? message.channel.id : undefined,
-        userId: message.author.id,
-        repo: session.repo,
-        prompt: content,
-        model: session.model,
-        agent: session.agent,
-        status: "queued",
-        createdAt: now,
-        updatedAt: now
-      };
-      await message.reply(`작업을 큐에 넣었습니다. job=${job.id}`);
-      await worker.enqueue(job);
-      return;
-    }
+    try {
+      if (message.author.bot) return;
+      if (!shouldRespond(message, client.user?.id)) return;
+      const sessionKey = makeSessionKey(message);
+      const session = store.getSession(sessionKey);
+      const content = cleanMention(message.content, client.user?.id).trim();
+      if (!content) return;
+      if (!session.repo && looksLikeCodingRequest(content)) {
+        await message.reply("먼저 `/repo owner/name`으로 작업할 GitHub repo를 설정하세요.");
+        return;
+      }
+      if (looksLikeCodingRequest(content) && session.repo) {
+        const now = new Date().toISOString();
+        const job: Job = {
+          id: crypto.randomBytes(4).toString("hex"),
+          sessionKey,
+          channelId: message.channelId,
+          threadId: message.channel.isThread() ? message.channel.id : undefined,
+          userId: message.author.id,
+          repo: session.repo,
+          prompt: content,
+          model: session.model,
+          agent: session.agent,
+          status: "queued",
+          createdAt: now,
+          updatedAt: now
+        };
+        await message.reply(`작업을 큐에 넣었습니다. job=${job.id}`);
+        await worker.enqueue(job);
+        return;
+      }
 
-    const reply = await models.complete({
-      model: session.model,
-      system: "You are a concise Korean assistant inside Discord. Keep replies practical.",
-      prompt: `Session summary:\n${session.summary}\n\nUser:\n${content}`
-    });
-    await message.reply(reply.text.slice(0, 1900));
+      const reply = await models.complete({
+        model: session.model,
+        system: "You are a concise Korean assistant inside Discord. Keep replies practical.",
+        prompt: `Session summary:\n${session.summary}\n\nUser:\n${content}`
+      });
+      await message.reply(reply.text.slice(0, 1900));
+    } catch (error) {
+      const text = error instanceof Error ? error.message : String(error);
+      await message.reply(`처리 중 오류: ${text.slice(0, 1500)}`).catch(() => undefined);
+    }
   });
 
   await client.login(config.discordToken);

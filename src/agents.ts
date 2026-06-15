@@ -36,14 +36,14 @@ export class AgentRouter {
 
   private async runClaudeCode(request: AgentRequest): Promise<AgentResponse> {
     const prompt = makeCliPrompt(request);
-    const result = await run(config.claudeCodeCommand, ["-p", prompt], request.repoDir, 600_000);
+    const result = await run(config.claudeCodeCommand, ["-p"], request.repoDir, 600_000, { input: prompt });
     if (result.code !== 0) throw new Error(`claude-code failed\n${result.stderr || result.stdout}`);
     return { text: result.stdout, source: "claude-code" };
   }
 
   private async runCodex(request: AgentRequest): Promise<AgentResponse> {
     const prompt = makeCliPrompt(request);
-    const result = await run(config.codexCommand, ["exec", prompt], request.repoDir, 600_000);
+    const result = await run(config.codexCommand, ["exec", "-"], request.repoDir, 600_000, { input: prompt });
     if (result.code !== 0) throw new Error(`codex failed\n${result.stderr || result.stdout}`);
     return { text: result.stdout, source: "codex" };
   }
