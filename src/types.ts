@@ -40,6 +40,7 @@ export type Job = {
   status: JobStatus;
   branch?: string;
   diff?: string;
+  applyMode?: "patch" | "worktree";
   prUrl?: string;
   progressMessageId?: string;
   progressLabel?: string;

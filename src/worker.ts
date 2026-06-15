@@ -56,38 +56,53 @@ export class Worker {
     if (!job || !job.diff || !job.branch) throw new Error("Job is not awaiting approval");
     const channel = await this.getChannel(job.threadId ?? job.channelId);
     const repoDir = this.jobDir(job);
-    await markSafeDirectory(repoDir);
-    await this.store.updateJob(job.id, { status: "approved" });
-    await this.updateProgress(job, channel, 62, "승인됨. patch 적용 중");
+    try {
+      await markSafeDirectory(repoDir);
+      await this.store.updateJob(job.id, { status: "approved" });
+      await this.updateProgress(job, channel, 62, job.applyMode === "worktree" ? "승인됨. worktree 변경 검증 중" : "승인됨. patch 적용 중");
 
-    await fs.writeFile(path.join(repoDir, "agent.patch"), job.diff);
-    assertOk(await run("git", ["apply", "--whitespace=fix", "agent.patch"], repoDir), "git apply");
-    await this.updateProgress(job, channel, 70, "로컬 체크 처리 중");
-    await this.runProjectChecks(repoDir, channel);
-    await this.updateProgress(job, channel, 78, "커밋 생성 중");
-    assertOk(await run("git", ["add", "-A"], repoDir), "git add");
-    const diffCheck = await run("git", ["diff", "--cached", "--quiet"], repoDir);
-    if (diffCheck.code === 0) throw new Error("Patch produced no changes");
-    assertOk(await run("git", ["commit", "-m", `Apply AI agent changes (${job.id})`], repoDir), "git commit");
-    await this.updateProgress(job, channel, 86, "브랜치 push 중");
-    assertOk(await run("git", ["push", "-u", "origin", job.branch], repoDir, 180_000), "git push");
+      if (job.applyMode === "worktree") {
+        const worktreeDiff = await run("git", ["diff", "--quiet"], repoDir);
+        if (worktreeDiff.code === 0) throw new Error("Worktree contains no changes to commit");
+      } else {
+        await fs.writeFile(path.join(repoDir, "agent.patch"), job.diff);
+        assertOk(await run("git", ["apply", "--check", "--whitespace=fix", "agent.patch"], repoDir), "git apply check");
+        assertOk(await run("git", ["apply", "--whitespace=fix", "agent.patch"], repoDir), "git apply");
+      }
+      await this.updateProgress(job, channel, 70, "로컬 체크 처리 중");
+      await this.runProjectChecks(repoDir, channel);
+      await this.updateProgress(job, channel, 78, "커밋 생성 중");
+      assertOk(await run("git", ["add", "-A"], repoDir), "git add");
+      const diffCheck = await run("git", ["diff", "--cached", "--quiet"], repoDir);
+      if (diffCheck.code === 0) throw new Error("Patch produced no changes");
+      assertOk(await run("git", ["commit", "-m", `Apply AI agent changes (${job.id})`], repoDir), "git commit");
+      await this.updateProgress(job, channel, 86, "브랜치 push 중");
+      assertOk(await run("git", ["push", "-u", "origin", job.branch], repoDir, 180_000), "git push");
 
-    await this.updateProgress(job, channel, 92, "PR 생성 중");
-    const pr = await createPullRequest(
-      job.repo,
-      job.branch,
-      `AI agent changes: ${job.prompt.slice(0, 60)}`,
-      `Requested from Discord by <@${job.userId}>.\n\nPrompt:\n\n${job.prompt}`
-    );
-    const updated = await this.store.updateJob(job.id, { status: "pushed", prUrl: pr.url });
-    await this.store.appendMessage(job.sessionKey, {
-      role: "assistant",
-      text: `Job ${job.id} was pushed and PR was created: ${pr.url}`
-    });
-    await this.updateProgress(updated, channel, 96, "PR 생성 완료. CI 확인 대기 중");
-    await channel.send(`PR 생성 완료: ${pr.url}\nGitHub Actions 결과를 확인합니다. NAS에서는 LOCAL_CHECKS=${config.localChecks}로 처리했습니다.`);
-    void this.reportCi(job, pr.headSha);
-    return updated;
+      await this.updateProgress(job, channel, 92, "PR 생성 중");
+      const pr = await createPullRequest(
+        job.repo,
+        job.branch,
+        `AI agent changes: ${job.prompt.slice(0, 60)}`,
+        `Requested from Discord by <@${job.userId}>.\n\nPrompt:\n\n${job.prompt}`
+      );
+      const updated = await this.store.updateJob(job.id, { status: "pushed", prUrl: pr.url });
+      await this.store.appendMessage(job.sessionKey, {
+        role: "assistant",
+        text: `Job ${job.id} was pushed and PR was created: ${pr.url}`
+      });
+      await this.updateProgress(updated, channel, 96, "PR 생성 완료. CI 확인 대기 중");
+      await channel.send(`PR 생성 완료: ${pr.url}\nGitHub Actions 결과를 확인합니다. NAS에서는 LOCAL_CHECKS=${config.localChecks}로 처리했습니다.`);
+      void this.reportCi(job, pr.headSha);
+      return updated;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const failed = await this.store.updateJob(job.id, { status: "failed", error: message });
+      await this.store.appendMessage(job.sessionKey, { role: "assistant", text: `Job ${job.id} failed during approval: ${message}` });
+      await this.updateProgress(failed, channel, failed.progressPercent ?? 62, `실패: ${message.slice(0, 80)}`);
+      await channel.send(`승인 후 작업 실패: ${message}`);
+      throw error;
+    }
   }
 
   private async prepareDiff(job: Job): Promise<void> {
@@ -132,10 +147,11 @@ export class Worker {
             : `Model did not return a unified diff.${detail ? `\n\nModel output:\n${detail}` : ""}`
         );
       }
-      if (response.mode === "worktree") {
-        await resetWorktree(repoDir);
+      const applyMode = response.mode === "worktree" ? "worktree" : "patch";
+      if (applyMode === "patch") {
+        await validatePatch(repoDir, diff);
       }
-      currentJob = await this.store.updateJob(job.id, { status: "awaiting_approval", branch, diff });
+      currentJob = await this.store.updateJob(job.id, { status: "awaiting_approval", branch, diff, applyMode });
       await this.store.appendMessage(job.sessionKey, {
         role: "assistant",
         text: `Prepared a code change for job=${job.id}. Awaiting approval. Summary: ${summarizeDiff(diff)}`
@@ -310,6 +326,16 @@ async function resetWorktree(repoDir: string): Promise<void> {
 async function markSafeDirectory(repoDir: string): Promise<void> {
   const normalized = path.resolve(repoDir).replaceAll("\\", "/");
   await run("git", ["config", "--global", "--add", "safe.directory", normalized], repoDir);
+}
+
+async function validatePatch(repoDir: string, diff: string): Promise<void> {
+  const patchFile = path.join(repoDir, ".agent-check.patch");
+  await fs.writeFile(patchFile, diff.endsWith("\n") ? diff : `${diff}\n`);
+  const result = await run("git", ["apply", "--check", "--whitespace=fix", ".agent-check.patch"], repoDir);
+  await fs.rm(patchFile, { force: true });
+  if (result.code !== 0) {
+    throw new Error(`Agent produced an invalid patch. Ask again with a smaller task.\n${result.stderr || result.stdout}`);
+  }
 }
 
 async function exists(file: string): Promise<boolean> {
