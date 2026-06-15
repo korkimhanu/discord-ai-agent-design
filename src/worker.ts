@@ -4,7 +4,7 @@ import { ActionRowBuilder, ButtonBuilder, ButtonStyle, TextChannel, ThreadChanne
 import { AgentRouter } from "./agents.js";
 import { config } from "./config.js";
 import { collectRepoContext } from "./context.js";
-import { createPullRequest, getGithubToken, parseRepo } from "./github.js";
+import { createPullRequest, getGithubToken, parseRepo, waitForCiSummary } from "./github.js";
 import { ModelRouter } from "./models.js";
 import { assertOk, run } from "./shell.js";
 import type { Job } from "./types.js";
@@ -50,25 +50,29 @@ export class Worker {
   async approve(jobId: string): Promise<Job> {
     const job = this.store.getJob(jobId);
     if (!job || !job.diff || !job.branch) throw new Error("Job is not awaiting approval");
+    const channel = await this.getChannel(job.threadId ?? job.channelId);
     const repoDir = this.jobDir(job);
     await this.store.updateJob(job.id, { status: "approved" });
 
     await fs.writeFile(path.join(repoDir, "agent.patch"), job.diff);
     assertOk(await run("git", ["apply", "--whitespace=fix", "agent.patch"], repoDir), "git apply");
-    await this.runProjectChecks(repoDir);
+    await this.runProjectChecks(repoDir, channel);
     assertOk(await run("git", ["add", "-A"], repoDir), "git add");
     const diffCheck = await run("git", ["diff", "--cached", "--quiet"], repoDir);
     if (diffCheck.code === 0) throw new Error("Patch produced no changes");
     assertOk(await run("git", ["commit", "-m", `Apply AI agent changes (${job.id})`], repoDir), "git commit");
     assertOk(await run("git", ["push", "-u", "origin", job.branch], repoDir, 180_000), "git push");
 
-    const prUrl = await createPullRequest(
+    const pr = await createPullRequest(
       job.repo,
       job.branch,
       `AI agent changes: ${job.prompt.slice(0, 60)}`,
       `Requested from Discord by <@${job.userId}>.\n\nPrompt:\n\n${job.prompt}`
     );
-    return this.store.updateJob(job.id, { status: "pushed", prUrl });
+    const updated = await this.store.updateJob(job.id, { status: "pushed", prUrl: pr.url });
+    await channel.send(`PR 생성 완료: ${pr.url}\nGitHub Actions 결과를 확인합니다. NAS에서는 LOCAL_CHECKS=${config.localChecks}로 처리했습니다.`);
+    void this.reportCi(job, pr.headSha);
+    return updated;
   }
 
   private async prepareDiff(job: Job): Promise<void> {
@@ -125,7 +129,11 @@ export class Worker {
     assertOk(await run("git", ["remote", "set-url", "origin", remote], target), "git remote set-url");
   }
 
-  private async runProjectChecks(repoDir: string): Promise<void> {
+  private async runProjectChecks(repoDir: string, channel: Sendable): Promise<void> {
+    if (config.localChecks === "none") {
+      await channel.send("로컬 체크 생략: NAS 부하를 피하기 위해 빌드/테스트는 GitHub Actions에 맡깁니다.");
+      return;
+    }
     const packageJson = path.join(repoDir, "package.json");
     if (await exists(packageJson)) {
       if (await exists(path.join(repoDir, "package-lock.json"))) {
@@ -133,13 +141,43 @@ export class Worker {
       }
       await run("npm", ["run", "lint", "--if-present"], repoDir, 180_000);
       await run("npm", ["run", "typecheck", "--if-present"], repoDir, 180_000);
-      await run("npm", ["test", "--if-present"], repoDir, 180_000);
-      await run("npm", ["run", "build", "--if-present"], repoDir, 240_000);
+      if (config.localChecks === "full") {
+        await run("npm", ["test", "--if-present"], repoDir, 180_000);
+        await run("npm", ["run", "build", "--if-present"], repoDir, 240_000);
+      }
     }
   }
 
   private jobDir(job: Job): string {
     return path.join(config.workspaceRoot, job.id);
+  }
+
+  private async reportCi(job: Job, headSha: string): Promise<void> {
+    const channel = await this.getChannel(job.threadId ?? job.channelId);
+    try {
+      const summary = await waitForCiSummary(job.repo, headSha, config.ciPollSeconds);
+      const checks = summary.checks.length ? summary.checks.slice(0, 10).join("\n") : "아직 check run이 없습니다.";
+      const artifacts = summary.artifacts.length
+        ? summary.artifacts
+            .slice(0, 8)
+            .map((artifact) => `- ${artifact.name}: ${artifact.url}`)
+            .join("\n")
+        : "artifact 없음";
+      await channel.send(
+        [
+          `CI 상태: ${summary.state}`,
+          `Checks: ${summary.checksUrl}`,
+          "```text",
+          checks,
+          "```",
+          "Artifacts/APK/screenshots:",
+          artifacts
+        ].join("\n")
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await channel.send(`CI 상태 확인 실패: ${message}`);
+    }
   }
 }
 

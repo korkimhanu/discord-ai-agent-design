@@ -12,6 +12,8 @@ Discord에서 일반 AI처럼 대화하고, GitHub repo 작업은 승인 기반�
 - AI가 unified diff 생성
 - Discord 버튼으로 변경 승인
 - 승인 후 patch 적용, 테스트/빌드, commit, push, PR 생성
+- NAS 부하를 피하기 위한 `LOCAL_CHECKS=none/light/full`
+- PR 생성 후 GitHub Actions check와 artifact 링크 Discord 알림
 - API 없이 로그인된 Codex CLI / Claude Code CLI 사용
 - 선택적으로 OpenAI / Claude API 모델 라우팅
 - Synology NAS Docker 실행 지원
@@ -36,6 +38,8 @@ DEFAULT_MODEL=codex
 DEFAULT_AGENT=codex
 CLAUDE_CODE_COMMAND=claude
 CODEX_COMMAND=codex
+LOCAL_CHECKS=none
+CI_POLL_SECONDS=180
 ```
 
 OpenAI/Anthropic API를 쓸 때만 아래를 추가로 채웁니다.
@@ -132,10 +136,78 @@ Reject
 `Apply and PR`을 누르면:
 
 1. patch 적용
-2. package.json이 있으면 npm 기반 lint/typecheck/test/build 실행
+2. `LOCAL_CHECKS` 설정에 따라 NAS에서 로컬 체크 실행 또는 생략
 3. commit
 4. branch push
 5. PR 생성
+6. GitHub Actions 상태와 artifact 링크를 Discord에 알림
+
+## 빌드, 테스트, 스크린샷
+
+NAS CPU가 약하면 앱 전체 빌드나 emulator 테스트를 NAS에서 돌리지 않는 편이 맞습니다.
+
+권장값:
+
+```env
+LOCAL_CHECKS=none
+```
+
+모드:
+
+```text
+none  NAS에서 빌드/테스트 생략. GitHub Actions에 맡김.
+light npm ci, lint, typecheck까지만 실행.
+full  npm test, npm run build까지 NAS에서 실행.
+```
+
+권장 운영:
+
+```text
+NAS Worker:
+- repo clone
+- AI diff 생성
+- patch 적용
+- branch push
+- PR 생성
+
+GitHub Actions:
+- full install
+- full test
+- full build
+- emulator/browser smoke test
+- screenshot/APK artifact 업로드
+
+Discord Bot:
+- PR 링크 전송
+- Actions check 상태 전송
+- artifact/APK/screenshot 링크 전송
+```
+
+이 repo에는 기본 `.github/workflows/ci.yml`이 들어 있습니다. 실제 앱 repo에도 비슷한 workflow가 있어야 봇이 PR 생성 후 CI와 artifact를 볼 수 있습니다.
+
+웹앱은 Playwright를 추가해서 screenshot을 artifact로 올리는 식이 좋습니다.
+
+```yaml
+- run: npx playwright install --with-deps
+- run: npx playwright test
+- uses: actions/upload-artifact@v4
+  if: always()
+  with:
+    name: screenshots
+    path: test-results
+```
+
+Android 앱은 GitHub Actions에서 APK와 emulator screenshot을 artifact로 올립니다.
+
+```yaml
+- run: ./gradlew assembleDebug
+- uses: actions/upload-artifact@v4
+  with:
+    name: app-debug-apk
+    path: app/build/outputs/apk/debug/*.apk
+```
+
+Discord에는 APK 파일 자체를 직접 보내기보다 artifact 링크를 보내는 구조입니다.
 
 ## 모델과 에이전트
 
