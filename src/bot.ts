@@ -38,6 +38,9 @@ export async function startBot(): Promise<void> {
 
   client.on(Events.InteractionCreate, async (interaction) => {
     try {
+      console.log(
+        `interaction ${interaction.type} command=${interaction.isChatInputCommand() ? interaction.commandName : "n/a"} user=${interaction.user.id} channel=${interaction.channelId}`
+      );
       if (interaction.isChatInputCommand()) await handleSlash(interaction, store);
       if (interaction.isButton()) await handleButton(interaction, store, worker);
     } catch (error) {
@@ -51,6 +54,9 @@ export async function startBot(): Promise<void> {
   client.on(Events.MessageCreate, async (message) => {
     try {
       if (message.author.bot) return;
+      console.log(
+        `message guild=${message.guildId ?? "dm"} channel=${message.channelId} author=${message.author.id} mentioned=${client.user?.id ? message.mentions.users.has(client.user.id) : false} length=${message.content.length}`
+      );
       if (!shouldRespond(message, client.user?.id)) return;
       const sessionKey = makeSessionKey(message);
       const session = store.getSession(sessionKey);
@@ -81,12 +87,18 @@ export async function startBot(): Promise<void> {
         return;
       }
 
-      const reply = await models.complete({
-        model: session.model,
-        system: "You are a concise Korean assistant inside Discord. Keep replies practical.",
-        prompt: `Session summary:\n${session.summary}\n\nUser:\n${content}`
-      });
-      await message.reply(reply.text.slice(0, 1900));
+      const pending = await message.reply("생각 중...");
+      const typing = startTyping(message);
+      try {
+        const reply = await models.complete({
+          model: session.model,
+          system: "You are a concise Korean assistant inside Discord. Keep replies practical.",
+          prompt: `Session summary:\n${session.summary}\n\nUser:\n${content}`
+        });
+        await pending.edit(reply.text.slice(0, 1900) || "응답이 비어 있습니다.");
+      } finally {
+        clearInterval(typing);
+      }
     } catch (error) {
       const text = error instanceof Error ? error.message : String(error);
       await message.reply(`처리 중 오류: ${text.slice(0, 1500)}`).catch(() => undefined);
@@ -172,4 +184,15 @@ function makeSessionKey(message: Message): string {
 
 function makeInteractionSessionKey(interaction: ChatInputCommandInteraction): string {
   return `${interaction.guildId ?? "dm"}:${interaction.channelId}:${interaction.user.id}`;
+}
+
+function startTyping(message: Message): NodeJS.Timeout {
+  if ("sendTyping" in message.channel) {
+    void message.channel.sendTyping().catch(() => undefined);
+  }
+  return setInterval(() => {
+    if ("sendTyping" in message.channel) {
+      void message.channel.sendTyping().catch(() => undefined);
+    }
+  }, 8_000);
 }
