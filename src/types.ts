@@ -1,0 +1,50 @@
+export type ModelProfile = "auto" | "strong" | "balanced" | "cheap" | "local";
+export type AgentProfile = "api" | "claude-code" | "codex" | "auto";
+
+export type SessionState = {
+  key: string;
+  repo?: string;
+  model: ModelProfile | string;
+  agent: AgentProfile | string;
+  summary: string;
+  updatedAt: string;
+};
+
+export type JobStatus =
+  | "queued"
+  | "running"
+  | "awaiting_approval"
+  | "approved"
+  | "pushed"
+  | "failed";
+
+export type Job = {
+  id: string;
+  sessionKey: string;
+  channelId: string;
+  threadId?: string;
+  userId: string;
+  repo: string;
+  prompt: string;
+  model: string;
+  agent: string;
+  status: JobStatus;
+  branch?: string;
+  diff?: string;
+  prUrl?: string;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ModelRequest = {
+  model: string;
+  system: string;
+  prompt: string;
+};
+
+export type ModelResponse = {
+  text: string;
+  provider: string;
+  model: string;
+};

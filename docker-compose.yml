@@ -1,0 +1,9 @@
+services:
+  discord-ai-agent:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./workspaces:/app/workspaces
+      - ./.data:/app/.data
