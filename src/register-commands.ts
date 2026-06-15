@@ -19,7 +19,9 @@ const commands = [
           { name: "auto", value: "auto" },
           { name: "strong", value: "strong" },
           { name: "balanced", value: "balanced" },
-          { name: "cheap", value: "cheap" }
+          { name: "cheap", value: "cheap" },
+          { name: "codex", value: "codex" },
+          { name: "claude-code", value: "claude-code" }
         )
     ),
   new SlashCommandBuilder()
