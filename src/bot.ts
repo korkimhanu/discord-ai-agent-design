@@ -62,11 +62,11 @@ export async function startBot(): Promise<void> {
       const session = store.getSession(sessionKey);
       const content = cleanMention(message.content, client.user?.id).trim();
       if (!content) return;
-      if (!session.repo && looksLikeCodingRequest(content)) {
+      if (!session.repo && (looksLikeCodingRequest(content) || looksLikeRepoReadRequest(content))) {
         await message.reply("먼저 `/repo owner/name`으로 작업할 GitHub repo를 설정하세요.");
         return;
       }
-      if (looksLikeCodingRequest(content) && session.repo) {
+      if ((looksLikeCodingRequest(content) || looksLikeRepoReadRequest(content)) && session.repo) {
         const now = new Date().toISOString();
         const job: Job = {
           id: crypto.randomBytes(4).toString("hex"),
@@ -76,6 +76,7 @@ export async function startBot(): Promise<void> {
           userId: message.author.id,
           repo: session.repo,
           prompt: content,
+          kind: looksLikeCodingRequest(content) ? "change" : "analysis",
           model: session.model,
           agent: session.agent,
           status: "queued",
@@ -174,7 +175,11 @@ function cleanMention(content: string, botId?: string): string {
 }
 
 function looksLikeCodingRequest(content: string): boolean {
-  return /(고쳐|수정|구현|추가|테스트|빌드|PR|repo|레포|버그|fix|implement|build|test)/i.test(content);
+  return /(고쳐|수정|구현|추가|삭제|변경|패치|테스트\s*돌|빌드\s*돌|PR|버그\s*고|fix|implement|change|patch|build|test)/i.test(content);
+}
+
+function looksLikeRepoReadRequest(content: string): boolean {
+  return /(레포|repo|깃헙|github|프로젝트|코드).*(분석|알려|설명|요약|뭐|무슨|구조|파악|review|analy|explain|summar)/i.test(content);
 }
 
 function makeSessionKey(message: Message): string {

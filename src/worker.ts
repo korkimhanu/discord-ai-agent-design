@@ -40,7 +40,11 @@ export class Worker {
         if (!jobId) continue;
         const job = this.store.getJob(jobId);
         if (!job) continue;
-        await this.prepareDiff(job);
+        if (job.kind === "analysis") {
+          await this.prepareAnalysis(job);
+        } else {
+          await this.prepareDiff(job);
+        }
       }
     } finally {
       this.running = false;
@@ -149,6 +153,42 @@ export class Worker {
       currentJob = await this.store.updateJob(job.id, { status: "failed", error: message });
       await this.updateProgress(currentJob, channel, currentJob.progressPercent ?? 0, `실패: ${message.slice(0, 80)}`);
       await channel.send(`작업 실패: ${message}`);
+    }
+  }
+
+  private async prepareAnalysis(job: Job): Promise<void> {
+    const channel = await this.getChannel(job.threadId ?? job.channelId);
+    let currentJob = job;
+    try {
+      const progress = await channel.send(progressContent(job, 5, "repo 분석 작업 시작"));
+      currentJob = await this.store.updateJob(job.id, {
+        status: "running",
+        progressMessageId: progress.id,
+        progressLabel: "repo 분석 작업 시작",
+        progressPercent: 5
+      });
+      const repoDir = this.jobDir(job);
+      await this.updateProgress(currentJob, channel, 15, "workspace 준비 중");
+      await fs.rm(repoDir, { recursive: true, force: true });
+      await fs.mkdir(repoDir, { recursive: true });
+      await this.updateProgress(currentJob, channel, 30, "GitHub repo clone 중");
+      await this.cloneRepo(job.repo, repoDir);
+      await this.updateProgress(currentJob, channel, 55, "관련 파일 context 수집 중");
+      const context = await collectRepoContext(repoDir, job.prompt);
+      await this.updateProgress(currentJob, channel, 75, `${job.model} 모델로 분석 중`);
+      const response = await this.models.complete({
+        model: job.model,
+        system: "You are a senior software engineer. Answer in Korean. Analyze the repository from the provided file list and snippets. Do not propose file edits unless asked.",
+        prompt: `USER REQUEST\n${job.prompt}\n\nREPOSITORY CONTEXT\n${context}`
+      });
+      currentJob = await this.store.updateJob(job.id, { status: "completed" });
+      await this.updateProgress(currentJob, channel, 100, "분석 완료");
+      await channel.send(response.text.slice(0, 1900));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      currentJob = await this.store.updateJob(job.id, { status: "failed", error: message });
+      await this.updateProgress(currentJob, channel, currentJob.progressPercent ?? 0, `실패: ${message.slice(0, 80)}`);
+      await channel.send(`분석 실패: ${message}`);
     }
   }
 

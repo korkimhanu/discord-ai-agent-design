@@ -16,6 +16,7 @@ export type JobStatus =
   | "awaiting_approval"
   | "approved"
   | "pushed"
+  | "completed"
   | "failed";
 
 export type Job = {
@@ -26,6 +27,7 @@ export type Job = {
   userId: string;
   repo: string;
   prompt: string;
+  kind?: "change" | "analysis";
   model: string;
   agent: string;
   status: JobStatus;
