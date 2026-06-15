@@ -56,6 +56,7 @@ export class Worker {
     if (!job || !job.diff || !job.branch) throw new Error("Job is not awaiting approval");
     const channel = await this.getChannel(job.threadId ?? job.channelId);
     const repoDir = this.jobDir(job);
+    await markSafeDirectory(repoDir);
     await this.store.updateJob(job.id, { status: "approved" });
     await this.updateProgress(job, channel, 62, "승인됨. patch 적용 중");
 
@@ -208,6 +209,7 @@ export class Worker {
     const token = await getGithubToken();
     const remote = `https://x-access-token:${token}@github.com/${owner}/${repo}.git`;
     assertOk(await run("git", ["clone", remote, "."], target, 180_000), "git clone");
+    await markSafeDirectory(target);
     assertOk(await run("git", ["remote", "set-url", "origin", remote], target), "git remote set-url");
   }
 
@@ -303,6 +305,11 @@ async function readWorktreeDiff(repoDir: string): Promise<string> {
 async function resetWorktree(repoDir: string): Promise<void> {
   await run("git", ["checkout", "--", "."], repoDir);
   await run("git", ["clean", "-fd"], repoDir);
+}
+
+async function markSafeDirectory(repoDir: string): Promise<void> {
+  const normalized = path.resolve(repoDir).replaceAll("\\", "/");
+  await run("git", ["config", "--global", "--add", "safe.directory", normalized], repoDir);
 }
 
 async function exists(file: string): Promise<boolean> {
