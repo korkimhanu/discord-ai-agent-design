@@ -62,22 +62,22 @@ export class Worker {
       await this.updateProgress(job, channel, 62, job.applyMode === "worktree" ? "승인됨. worktree 변경 검증 중" : "승인됨. patch 적용 중");
 
       if (job.applyMode === "worktree") {
-        const worktreeDiff = await run("git", ["diff", "--quiet"], repoDir);
+        const worktreeDiff = await this.runStep(job, channel, repoDir, 64, "worktree 변경 확인 중", "git diff --quiet", "git", ["diff", "--quiet"]);
         if (worktreeDiff.code === 0) throw new Error("Worktree contains no changes to commit");
       } else {
         await fs.writeFile(path.join(repoDir, "agent.patch"), job.diff);
-        assertOk(await run("git", ["apply", "--check", "--whitespace=fix", "agent.patch"], repoDir), "git apply check");
-        assertOk(await run("git", ["apply", "--whitespace=fix", "agent.patch"], repoDir), "git apply");
+        assertOk(await this.runStep(job, channel, repoDir, 64, "patch 검증 중", "git apply --check", "git", ["apply", "--check", "--whitespace=fix", "agent.patch"]), "git apply check");
+        assertOk(await this.runStep(job, channel, repoDir, 66, "patch 적용 중", "git apply", "git", ["apply", "--whitespace=fix", "agent.patch"]), "git apply");
       }
       await this.updateProgress(job, channel, 70, "로컬 체크 처리 중");
       await this.runProjectChecks(repoDir, channel);
       await this.updateProgress(job, channel, 78, "커밋 생성 중");
-      assertOk(await run("git", ["add", "-A"], repoDir), "git add");
-      const diffCheck = await run("git", ["diff", "--cached", "--quiet"], repoDir);
+      assertOk(await this.runStep(job, channel, repoDir, 80, "변경 파일 stage 중", "git add -A", "git", ["add", "-A"]), "git add");
+      const diffCheck = await this.runStep(job, channel, repoDir, 82, "staged 변경 확인 중", "git diff --cached --quiet", "git", ["diff", "--cached", "--quiet"]);
       if (diffCheck.code === 0) throw new Error("Patch produced no changes");
-      assertOk(await run("git", ["commit", "-m", `Apply AI agent changes (${job.id})`], repoDir), "git commit");
+      assertOk(await this.runStep(job, channel, repoDir, 84, "커밋 생성 중", "git commit", "git", ["commit", "-m", `Apply AI agent changes (${job.id})`]), "git commit");
       await this.updateProgress(job, channel, 86, "브랜치 push 중");
-      assertOk(await run("git", ["push", "-u", "origin", job.branch], repoDir, 180_000), "git push");
+      assertOk(await this.runStep(job, channel, repoDir, 86, "브랜치 push 중", `git push origin ${job.branch}`, "git", ["push", "-u", "origin", job.branch], 180_000), "git push");
 
       await this.updateProgress(job, channel, 92, "PR 생성 중");
       const pr = await createPullRequest(
@@ -122,21 +122,23 @@ export class Worker {
       await fs.rm(repoDir, { recursive: true, force: true });
       await fs.mkdir(repoDir, { recursive: true });
       await this.updateProgress(currentJob, channel, 22, "GitHub repo clone 중");
-      await this.cloneRepo(job.repo, repoDir);
+      await this.trackStep(currentJob, channel, 22, "GitHub repo clone 중", `clone ${job.repo}`, () => this.cloneRepo(job.repo, repoDir));
       const branch = `ai-agent/${job.id}`;
       await this.updateProgress(currentJob, channel, 30, "작업 브랜치 생성 중");
-      assertOk(await run("git", ["checkout", "-b", branch], repoDir), "git checkout");
+      assertOk(await this.runStep(currentJob, channel, repoDir, 30, "작업 브랜치 생성 중", `git checkout -b ${branch}`, "git", ["checkout", "-b", branch]), "git checkout");
       await this.updateProgress(currentJob, channel, 38, "관련 파일 context 수집 중");
-      const context = await collectRepoContext(repoDir, job.prompt);
-      await this.updateProgress(currentJob, channel, 48, `${job.agent} agent 실행 중`);
-      const response = await this.agents.generateDiff({
-        agent: job.agent,
-        model: job.model,
-        repoDir,
-        system: diffSystemPrompt(),
-        prompt: `${job.memoryContext ?? ""}\n\nCURRENT USER REQUEST\n${job.prompt}`,
-        repoContext: context
-      });
+      const context = await this.trackStep(currentJob, channel, 38, "관련 파일 context 수집 중", "파일 트리와 관련 소스 추출", () => collectRepoContext(repoDir, job.prompt));
+      await this.updateProgress(currentJob, channel, 48, `${job.agent} agent 실행 중: 코드 수정안 생성`);
+      const response = await this.trackStep(currentJob, channel, 48, `${job.agent} agent 실행 중`, "코드 수정안 생성", () =>
+        this.agents.generateDiff({
+          agent: job.agent,
+          model: job.model,
+          repoDir,
+          system: diffSystemPrompt(),
+          prompt: `${job.memoryContext ?? ""}\n\nCURRENT USER REQUEST\n${job.prompt}`,
+          repoContext: context
+        })
+      );
       await this.updateProgress(currentJob, channel, 56, "변경 diff 수집 중");
       const diff = response.mode === "worktree" ? await readWorktreeDiff(repoDir) : extractDiff(response.text);
       if (!diff) {
@@ -198,15 +200,17 @@ export class Worker {
       await fs.rm(repoDir, { recursive: true, force: true });
       await fs.mkdir(repoDir, { recursive: true });
       await this.updateProgress(currentJob, channel, 30, "GitHub repo clone 중");
-      await this.cloneRepo(job.repo, repoDir);
+      await this.trackStep(currentJob, channel, 30, "GitHub repo clone 중", `clone ${job.repo}`, () => this.cloneRepo(job.repo, repoDir));
       await this.updateProgress(currentJob, channel, 55, "관련 파일 context 수집 중");
-      const context = await collectRepoContext(repoDir, job.prompt);
+      const context = await this.trackStep(currentJob, channel, 55, "관련 파일 context 수집 중", "파일 트리와 관련 소스 추출", () => collectRepoContext(repoDir, job.prompt));
       await this.updateProgress(currentJob, channel, 75, `${job.model} 모델로 분석 중`);
-      const response = await this.models.complete({
-        model: job.model,
-        system: "You are a senior software engineer. Answer in Korean. Analyze the repository from the provided file list and snippets. Do not propose file edits unless asked.",
-        prompt: `${job.memoryContext ?? ""}\n\nUSER REQUEST\n${job.prompt}\n\nREPOSITORY CONTEXT\n${context}`
-      });
+      const response = await this.trackStep(currentJob, channel, 75, `${job.model} 모델로 분석 중`, "repo 분석 답변 생성", () =>
+        this.models.complete({
+          model: job.model,
+          system: "You are a senior software engineer. Answer in Korean. Analyze the repository from the provided file list and snippets. Do not propose file edits unless asked.",
+          prompt: `${job.memoryContext ?? ""}\n\nUSER REQUEST\n${job.prompt}\n\nREPOSITORY CONTEXT\n${context}`
+        })
+      );
       currentJob = await this.store.updateJob(job.id, { status: "completed" });
       await this.store.appendMessage(job.sessionKey, { role: "assistant", text: response.text.slice(0, 4000) });
       await this.updateProgress(currentJob, channel, 100, "분석 완료");
@@ -293,6 +297,51 @@ export class Worker {
       await message.edit(progressContent(updated, percent, label)).catch(() => undefined);
     }
     return updated;
+  }
+
+  private async runStep(
+    job: Job,
+    channel: Sendable,
+    cwd: string,
+    percent: number,
+    label: string,
+    detail: string,
+    command: string,
+    args: string[],
+    timeoutMs = 120_000
+  ) {
+    const started = Date.now();
+    await this.updateProgress(job, channel, percent, `${label}\n현재 실행: ${detail}\n경과: 0초`);
+    const heartbeat = setInterval(() => {
+      const seconds = Math.floor((Date.now() - started) / 1000);
+      void this.updateProgress(job, channel, percent, `${label}\n현재 실행: ${detail}\n경과: ${seconds}초`).catch(() => undefined);
+    }, 10_000);
+    try {
+      return await run(command, args, cwd, timeoutMs);
+    } finally {
+      clearInterval(heartbeat);
+    }
+  }
+
+  private async trackStep<T>(
+    job: Job,
+    channel: Sendable,
+    percent: number,
+    label: string,
+    detail: string,
+    action: () => Promise<T>
+  ): Promise<T> {
+    const started = Date.now();
+    await this.updateProgress(job, channel, percent, `${label}\n현재 작업: ${detail}\n경과: 0초`);
+    const heartbeat = setInterval(() => {
+      const seconds = Math.floor((Date.now() - started) / 1000);
+      void this.updateProgress(job, channel, percent, `${label}\n현재 작업: ${detail}\n경과: ${seconds}초`).catch(() => undefined);
+    }, 10_000);
+    try {
+      return await action();
+    } finally {
+      clearInterval(heartbeat);
+    }
   }
 }
 
