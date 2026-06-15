@@ -69,6 +69,7 @@ export async function startBot(): Promise<void> {
         return;
       }
       if ((looksLikeCodingRequest(content) || looksLikeRepoReadRequest(content)) && session.repo) {
+        const kind = looksLikeCodingRequest(content) ? "change" : "analysis";
         const now = new Date().toISOString();
         const job: Job = {
           id: crypto.randomBytes(4).toString("hex"),
@@ -78,7 +79,7 @@ export async function startBot(): Promise<void> {
           userId: message.author.id,
           repo: session.repo,
           prompt: content,
-          kind: looksLikeCodingRequest(content) ? "change" : "analysis",
+          kind,
           memoryContext,
           model: session.model,
           agent: session.agent,
@@ -86,7 +87,7 @@ export async function startBot(): Promise<void> {
           createdAt: now,
           updatedAt: now
         };
-        await message.reply(`작업을 큐에 넣었습니다. job=${job.id}`);
+        await message.reply(`작업을 큐에 넣었습니다. kind=${kind}, job=${job.id}`);
         await worker.enqueue(job);
         return;
       }
@@ -189,7 +190,7 @@ function cleanMention(content: string, botId?: string): string {
 }
 
 function looksLikeCodingRequest(content: string): boolean {
-  return /(고쳐|수정|구현|추가|삭제|변경|패치|테스트\s*돌|빌드\s*돌|PR|버그\s*고|fix|implement|change|patch|build|test)/i.test(content);
+  return /(고쳐|수정|구현|추가|삭제|변경|패치|만들|만드|전환|변환|붙여|연동|배포|올려|링크|웹\s*버전|web\s*버전|웹으로|compose\s*multiplatform|multiplatform|테스트\s*돌|빌드\s*돌|PR|버그\s*고|fix|implement|create|make|add|change|convert|migrate|deploy|publish|link|patch|build|test)/i.test(content);
 }
 
 function looksLikeRepoReadRequest(content: string): boolean {
