@@ -79,6 +79,10 @@ export class Worker {
       `Requested from Discord by <@${job.userId}>.\n\nPrompt:\n\n${job.prompt}`
     );
     const updated = await this.store.updateJob(job.id, { status: "pushed", prUrl: pr.url });
+    await this.store.appendMessage(job.sessionKey, {
+      role: "assistant",
+      text: `Job ${job.id} was pushed and PR was created: ${pr.url}`
+    });
     await this.updateProgress(updated, channel, 96, "PR 생성 완료. CI 확인 대기 중");
     await channel.send(`PR 생성 완료: ${pr.url}\nGitHub Actions 결과를 확인합니다. NAS에서는 LOCAL_CHECKS=${config.localChecks}로 처리했습니다.`);
     void this.reportCi(job, pr.headSha);
@@ -114,7 +118,7 @@ export class Worker {
         model: job.model,
         repoDir,
         system: diffSystemPrompt(),
-        prompt: job.prompt,
+        prompt: `${job.memoryContext ?? ""}\n\nCURRENT USER REQUEST\n${job.prompt}`,
         repoContext: context
       });
       await this.updateProgress(currentJob, channel, 56, "변경 diff 수집 중");
@@ -131,6 +135,10 @@ export class Worker {
         await resetWorktree(repoDir);
       }
       currentJob = await this.store.updateJob(job.id, { status: "awaiting_approval", branch, diff });
+      await this.store.appendMessage(job.sessionKey, {
+        role: "assistant",
+        text: `Prepared a code change for job=${job.id}. Awaiting approval. Summary: ${summarizeDiff(diff)}`
+      });
       await this.updateProgress(currentJob, channel, 60, "승인 대기 중");
       await channel.send({
         content: [
@@ -151,6 +159,7 @@ export class Worker {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       currentJob = await this.store.updateJob(job.id, { status: "failed", error: message });
+      await this.store.appendMessage(job.sessionKey, { role: "assistant", text: `Job ${job.id} failed: ${message}` });
       await this.updateProgress(currentJob, channel, currentJob.progressPercent ?? 0, `실패: ${message.slice(0, 80)}`);
       await channel.send(`작업 실패: ${message}`);
     }
@@ -179,14 +188,16 @@ export class Worker {
       const response = await this.models.complete({
         model: job.model,
         system: "You are a senior software engineer. Answer in Korean. Analyze the repository from the provided file list and snippets. Do not propose file edits unless asked.",
-        prompt: `USER REQUEST\n${job.prompt}\n\nREPOSITORY CONTEXT\n${context}`
+        prompt: `${job.memoryContext ?? ""}\n\nUSER REQUEST\n${job.prompt}\n\nREPOSITORY CONTEXT\n${context}`
       });
       currentJob = await this.store.updateJob(job.id, { status: "completed" });
+      await this.store.appendMessage(job.sessionKey, { role: "assistant", text: response.text.slice(0, 4000) });
       await this.updateProgress(currentJob, channel, 100, "분석 완료");
       await channel.send(response.text.slice(0, 1900));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       currentJob = await this.store.updateJob(job.id, { status: "failed", error: message });
+      await this.store.appendMessage(job.sessionKey, { role: "assistant", text: `Analysis job ${job.id} failed: ${message}` });
       await this.updateProgress(currentJob, channel, currentJob.progressPercent ?? 0, `실패: ${message.slice(0, 80)}`);
       await channel.send(`분석 실패: ${message}`);
     }
@@ -316,4 +327,11 @@ function progressContent(job: Job, percent: number, label: string): string {
 
 async function fetchMessage(channel: Sendable, messageId: string): Promise<Message | undefined> {
   return channel.messages.fetch(messageId).catch(() => undefined);
+}
+
+function summarizeDiff(diff: string): string {
+  const files = [...diff.matchAll(/^diff --git a\/(.+?) b\/(.+)$/gm)].map((match) => match[2]);
+  const additions = diff.match(/^\+/gm)?.length ?? 0;
+  const deletions = diff.match(/^-/gm)?.length ?? 0;
+  return `files=${files.slice(0, 8).join(", ") || "unknown"}, +${additions}, -${deletions}`;
 }

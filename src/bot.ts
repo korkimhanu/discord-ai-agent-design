@@ -62,6 +62,8 @@ export async function startBot(): Promise<void> {
       const session = store.getSession(sessionKey);
       const content = cleanMention(message.content, client.user?.id).trim();
       if (!content) return;
+      await store.appendMessage(sessionKey, { role: "user", text: content });
+      const memoryContext = store.buildMemoryContext(sessionKey);
       if (!session.repo && (looksLikeCodingRequest(content) || looksLikeRepoReadRequest(content))) {
         await message.reply("먼저 `/repo owner/name`으로 작업할 GitHub repo를 설정하세요.");
         return;
@@ -77,6 +79,7 @@ export async function startBot(): Promise<void> {
           repo: session.repo,
           prompt: content,
           kind: looksLikeCodingRequest(content) ? "change" : "analysis",
+          memoryContext,
           model: session.model,
           agent: session.agent,
           status: "queued",
@@ -93,10 +96,11 @@ export async function startBot(): Promise<void> {
       try {
         const reply = await models.complete({
           model: session.model,
-          system: "You are a concise Korean assistant inside Discord. Keep replies practical.",
-          prompt: `Session summary:\n${session.summary}\n\nUser:\n${content}`
+          system: "You are a concise Korean assistant inside Discord. Use session memory to preserve context. Keep replies practical.",
+          prompt: `${memoryContext}\n\nCurrent user message:\n${content}`
         });
         await pending.edit(reply.text.slice(0, 1900) || "응답이 비어 있습니다.");
+        await store.appendMessage(sessionKey, { role: "assistant", text: reply.text.slice(0, 4000) });
       } finally {
         clearInterval(typing);
       }
@@ -133,9 +137,19 @@ async function handleSlash(interaction: ChatInputCommandInteraction, store: Stor
   if (command === "status") {
     const session = store.getSession(key);
     await interaction.reply({
-      content: [`repo=${session.repo ?? "unset"}`, `model=${session.model}`, `agent=${session.agent}`].join("\n"),
+      content: [
+        `repo=${session.repo ?? "unset"}`,
+        `model=${session.model}`,
+        `agent=${session.agent}`,
+        `memory_messages=${session.messages?.length ?? 0}`,
+        `summary_chars=${session.summary.length}`
+      ].join("\n"),
       ephemeral: true
     });
+  }
+  if (command === "memory") {
+    const memory = store.buildMemoryContext(key).slice(0, 1900);
+    await interaction.reply({ content: `\`\`\`text\n${memory}\n\`\`\``, ephemeral: true });
   }
 }
 

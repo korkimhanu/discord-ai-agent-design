@@ -33,21 +33,21 @@ export async function collectRepoContext(repoDir: string, prompt: string): Promi
       score: keywords.reduce((sum, word) => sum + (file.toLowerCase().includes(word) ? 3 : 0), 0)
     }))
     .sort((a, b) => b.score - a.score)
-    .slice(0, 12);
+    .slice(0, 8);
 
-  const selected = scored.length ? scored : files.slice(0, 12).map((file) => ({ file, score: 0 }));
+  const selected = scored.length ? scored : files.slice(0, 8).map((file) => ({ file, score: 0 }));
   const chunks: string[] = [];
   for (const item of selected) {
     const full = path.join(repoDir, item.file);
     const stat = await fs.stat(full);
-    if (stat.size > 40_000) continue;
+    if (stat.size > 24_000) continue;
     const content = await fs.readFile(full, "utf8").catch(() => "");
     if (!content) continue;
-    chunks.push(`--- ${item.file} ---\n${content.slice(0, 12_000)}`);
+    chunks.push(`--- ${item.file} ---\n${content.slice(0, 8_000)}`);
   }
 
   const tree = await run("git", ["ls-files"], repoDir).catch(() => ({ stdout: files.join("\n") }));
-  return `FILES\n${tree.stdout.slice(0, 8000)}\n\nSELECTED FILE CONTENT\n${chunks.join("\n\n")}`;
+  return `FILES\n${tree.stdout.slice(0, 6000)}\n\nSELECTED FILE CONTENT\n${chunks.join("\n\n")}`;
 }
 
 async function listFiles(root: string): Promise<string[]> {

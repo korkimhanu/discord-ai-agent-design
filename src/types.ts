@@ -7,7 +7,14 @@ export type SessionState = {
   model: ModelProfile | string;
   agent: AgentProfile | string;
   summary: string;
+  messages?: SessionMessage[];
   updatedAt: string;
+};
+
+export type SessionMessage = {
+  role: "user" | "assistant" | "system";
+  text: string;
+  at: string;
 };
 
 export type JobStatus =
@@ -37,6 +44,7 @@ export type Job = {
   progressMessageId?: string;
   progressLabel?: string;
   progressPercent?: number;
+  memoryContext?: string;
   error?: string;
   createdAt: string;
   updatedAt: string;

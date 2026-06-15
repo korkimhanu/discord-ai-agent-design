@@ -39,7 +39,8 @@ const commands = [
           { name: "auto", value: "auto" }
         )
     ),
-  new SlashCommandBuilder().setName("status").setDescription("현재 세션 설정을 확인합니다.")
+  new SlashCommandBuilder().setName("status").setDescription("현재 세션 설정을 확인합니다."),
+  new SlashCommandBuilder().setName("memory").setDescription("현재 세션의 요약 메모리와 최근 대화를 확인합니다.")
 ].map((command) => command.toJSON());
 
 const rest = new REST({ version: "10" }).setToken(config.discordToken);

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config.js";
-import type { Job, SessionState } from "./types.js";
+import type { Job, SessionMessage, SessionState } from "./types.js";
 
 type Db = {
   sessions: Record<string, SessionState>;
@@ -35,6 +35,7 @@ export class Store {
       model: config.defaultModel,
       agent: config.defaultAgent,
       summary: "",
+      messages: [],
       updatedAt: new Date().toISOString()
     };
     this.db.sessions[key] = session;
@@ -47,6 +48,37 @@ export class Store {
     this.db.sessions[key] = next;
     await this.save();
     return next;
+  }
+
+  async appendMessage(key: string, message: Omit<SessionMessage, "at">): Promise<SessionState> {
+    const session = this.getSession(key);
+    const messages = [...(session.messages ?? []), { ...message, at: new Date().toISOString() }];
+    const compressed = compressMemory(session.summary, messages);
+    const next: SessionState = {
+      ...session,
+      summary: compressed.summary,
+      messages: compressed.messages,
+      updatedAt: new Date().toISOString()
+    };
+    this.db.sessions[key] = next;
+    await this.save();
+    return next;
+  }
+
+  buildMemoryContext(key: string): string {
+    const session = this.getSession(key);
+    const recent = (session.messages ?? [])
+      .slice(-12)
+      .map((message) => `${message.role}: ${message.text}`)
+      .join("\n");
+    return [
+      "SESSION MEMORY",
+      session.summary ? `Summary:\n${session.summary}` : "Summary: none",
+      recent ? `Recent messages:\n${recent}` : "Recent messages: none",
+      `Current repo: ${session.repo ?? "unset"}`,
+      `Current model: ${session.model}`,
+      `Current agent: ${session.agent}`
+    ].join("\n");
   }
 
   async createJob(job: Job): Promise<Job> {
@@ -67,4 +99,19 @@ export class Store {
     await this.save();
     return next;
   }
+}
+
+function compressMemory(summary: string, messages: SessionMessage[]): { summary: string; messages: SessionMessage[] } {
+  if (messages.length <= 24) return { summary, messages };
+  const older = messages.slice(0, messages.length - 12);
+  const recent = messages.slice(-12);
+  const newSummary = [
+    summary,
+    "Compressed older conversation:",
+    ...older.slice(-20).map((message) => `- ${message.role}: ${message.text.slice(0, 240)}`)
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .slice(-6000);
+  return { summary: newSummary, messages: recent };
 }
