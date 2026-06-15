@@ -48,7 +48,7 @@ export class AgentRouter {
     const prompt = makeCliPrompt(request);
     const result = await run(
       config.codexCommand,
-      ["exec", "--sandbox", "workspace-write", "-"],
+      ["exec", "--sandbox", config.codexSandbox, "-"],
       request.repoDir,
       600_000,
       { input: prompt }

@@ -16,6 +16,7 @@ export const config = {
   defaultAgent: process.env.DEFAULT_AGENT ?? "api",
   claudeCodeCommand: process.env.CLAUDE_CODE_COMMAND ?? "claude",
   codexCommand: process.env.CODEX_COMMAND ?? "codex",
+  codexSandbox: process.env.CODEX_SANDBOX ?? "workspace-write",
   localChecks: process.env.LOCAL_CHECKS ?? "none",
   ciPollSeconds: Number(process.env.CI_POLL_SECONDS ?? "180"),
   workspaceRoot: path.resolve(process.env.WORKSPACE_ROOT ?? "./workspaces"),
