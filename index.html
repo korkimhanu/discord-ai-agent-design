@@ -1,0 +1,506 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Discord AI Coding Agent 설계</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f8fb;
+      --panel: #ffffff;
+      --ink: #18202f;
+      --muted: #626d7f;
+      --line: #dce2ea;
+      --blue: #2563eb;
+      --green: #0f8f66;
+      --amber: #b7791f;
+      --red: #c2413f;
+      --code: #101827;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      line-height: 1.6;
+    }
+
+    header {
+      background: #111827;
+      color: white;
+      padding: 56px 24px 48px;
+    }
+
+    .wrap {
+      width: min(1120px, calc(100% - 40px));
+      margin: 0 auto;
+    }
+
+    .eyebrow {
+      margin: 0 0 12px;
+      color: #9fb8ff;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      max-width: 820px;
+      font-size: clamp(34px, 6vw, 68px);
+      line-height: 1.05;
+      letter-spacing: 0;
+    }
+
+    .lead {
+      max-width: 760px;
+      margin: 22px 0 0;
+      color: #d5dbea;
+      font-size: 19px;
+    }
+
+    main {
+      padding: 34px 0 64px;
+    }
+
+    section {
+      margin: 30px 0;
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      font-size: 28px;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 0 0 8px;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 0 0 14px;
+      color: var(--muted);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 16px;
+    }
+
+    .card {
+      grid-column: span 4;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px;
+    }
+
+    .wide {
+      grid-column: span 12;
+    }
+
+    .half {
+      grid-column: span 6;
+    }
+
+    .flow {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 20px;
+      overflow-x: auto;
+    }
+
+    pre {
+      margin: 0;
+      padding: 18px;
+      overflow-x: auto;
+      border-radius: 8px;
+      background: var(--code);
+      color: #e5edf7;
+      font-size: 14px;
+      line-height: 1.55;
+    }
+
+    code {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 26px;
+      padding: 2px 9px;
+      margin: 0 6px 6px 0;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #f8fafc;
+      color: #344255;
+      font-size: 13px;
+      font-weight: 650;
+    }
+
+    .list {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--muted);
+    }
+
+    .list li {
+      margin: 6px 0;
+    }
+
+    .status {
+      border-left: 4px solid var(--blue);
+    }
+
+    .safe {
+      border-left: 4px solid var(--green);
+    }
+
+    .warn {
+      border-left: 4px solid var(--amber);
+    }
+
+    .danger {
+      border-left: 4px solid var(--red);
+    }
+
+    .table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      display: table;
+    }
+
+    th,
+    td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: #eef3fa;
+      color: #243247;
+      font-size: 14px;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .footer {
+      color: #788397;
+      font-size: 14px;
+      padding-top: 20px;
+      border-top: 1px solid var(--line);
+    }
+
+    @media (max-width: 860px) {
+      .card,
+      .half {
+        grid-column: span 12;
+      }
+
+      header {
+        padding-top: 40px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <p class="eyebrow">Architecture Proposal</p>
+      <h1>Discord AI Coding Agent 설계</h1>
+      <p class="lead">
+        Discord에서는 일반 AI처럼 대화하고, 실제 코딩 작업은 Synology NAS worker와 GitHub PR 흐름으로 처리하는 구조입니다.
+        모델 선택과 에이전트 선택을 분리하고, 위험한 변경은 승인 기반으로 실행합니다.
+      </p>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section>
+      <h2>전체 구조</h2>
+      <div class="flow">
+        <pre><code>Discord
+  ↓
+Cloud Bot API
+  ↓
+Queue / DB
+  ↑
+Synology NAS Worker
+  ↓
+GitHub App
+  ↓
+GitHub Repo / PR / GitHub Actions</code></pre>
+      </div>
+    </section>
+
+    <section>
+      <h2>역할 분리</h2>
+      <div class="grid">
+        <article class="card">
+          <h3>Cloud Bot</h3>
+          <p>Discord 메시지를 받고 세션 상태, 승인 UI, 모델 설정, 작업 큐 등록을 담당합니다.</p>
+          <span class="tag">Discord</span><span class="tag">Session</span><span class="tag">Approval</span>
+        </article>
+        <article class="card">
+          <h3>Synology NAS Worker</h3>
+          <p>GitHub repo를 임시 workspace에 clone하고, 코드 수정, 테스트, 빌드, branch push를 수행합니다.</p>
+          <span class="tag">Docker</span><span class="tag">Build</span><span class="tag">Test</span>
+        </article>
+        <article class="card">
+          <h3>GitHub App</h3>
+          <p>repo별 최소 권한으로 installation token을 발급하고 PR, checks, branch 작업을 수행합니다.</p>
+          <span class="tag">PR</span><span class="tag">Checks</span><span class="tag">Permissions</span>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <h2>사용 방식</h2>
+      <div class="grid">
+        <article class="card half status">
+          <h3>일반 대화</h3>
+          <pre><code>나:
+my-org/my-repo에서 로그인 테스트 깨지는 거 봐줘
+
+봇:
+repo를 가져와서 실패 원인 확인하겠습니다.
+
+봇:
+수정 diff를 만들었습니다. PR로 올릴까요?</code></pre>
+        </article>
+        <article class="card half status">
+          <h3>설정 명령</h3>
+          <pre><code>/repo my-org/my-repo
+/model auto
+/model strong
+/model cheap
+/agent auto
+/agent claude-code
+/agent codex
+/budget 5</code></pre>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <h2>모델과 에이전트</h2>
+      <p>
+        <code>/model</code>은 판단과 답변 생성 모델을 고르고, <code>/agent</code>는 실제 코드를 수정하는 실행기를 고릅니다.
+        예를 들어 대화 판단은 GPT 계열로 하고, repo 수정은 Claude Code CLI나 Codex CLI로 맡길 수 있습니다.
+      </p>
+      <div class="flow">
+        <pre><code>{
+  "profiles": {
+    "auto": {
+      "primary": "strong",
+      "fallbacks": ["balanced", "cheap", "local"]
+    },
+    "strong": {
+      "provider": "openai",
+      "model": "gpt-5.5"
+    },
+    "balanced": {
+      "provider": "anthropic",
+      "model": "claude-sonnet"
+    },
+    "cheap": {
+      "provider": "openai",
+      "model": "gpt-5.4-mini"
+    },
+    "local": {
+      "provider": "ollama",
+      "model": "qwen-coder"
+    }
+  }
+}</code></pre>
+      </div>
+    </section>
+
+    <section>
+      <h2>작업 흐름</h2>
+      <table class="table">
+        <thead>
+          <tr>
+            <th>단계</th>
+            <th>처리</th>
+            <th>담당</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>1</td>
+            <td>Discord 메시지를 받아 의도와 repo context를 확인합니다.</td>
+            <td>Cloud Bot</td>
+          </tr>
+          <tr>
+            <td>2</td>
+            <td>작업을 queue에 등록하고 세션 상태를 저장합니다.</td>
+            <td>Cloud Bot / DB</td>
+          </tr>
+          <tr>
+            <td>3</td>
+            <td>NAS worker가 queue를 polling하고 repo를 임시 workspace에 clone합니다.</td>
+            <td>NAS Worker</td>
+          </tr>
+          <tr>
+            <td>4</td>
+            <td>관련 파일 검색, AI agent 실행, diff 생성, 빠른 테스트를 수행합니다.</td>
+            <td>NAS Worker / Agent</td>
+          </tr>
+          <tr>
+            <td>5</td>
+            <td>Discord에 diff와 테스트 결과를 보여주고 승인을 받습니다.</td>
+            <td>Cloud Bot</td>
+          </tr>
+          <tr>
+            <td>6</td>
+            <td>승인 후 branch push, PR 생성, GitHub Actions 상태 감시를 수행합니다.</td>
+            <td>NAS Worker / GitHub</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>승인 정책</h2>
+      <div class="grid">
+        <article class="card safe">
+          <h3>자동 허용</h3>
+          <ul class="list">
+            <li>repo clone</li>
+            <li>파일 읽기</li>
+            <li>git status / diff</li>
+            <li>lint, test, build</li>
+            <li>Actions 상태 조회</li>
+          </ul>
+        </article>
+        <article class="card warn">
+          <h3>승인 필요</h3>
+          <ul class="list">
+            <li>파일 수정 적용</li>
+            <li>commit / push</li>
+            <li>PR 생성</li>
+            <li>package install</li>
+            <li>workflow 파일 수정</li>
+          </ul>
+        </article>
+        <article class="card danger">
+          <h3>강한 승인 필요</h3>
+          <ul class="list">
+            <li>파일 삭제</li>
+            <li>git history rewrite</li>
+            <li>secret 접근</li>
+            <li>배포</li>
+            <li>main branch 직접 push</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <h2>Synology NAS 배치</h2>
+      <div class="flow">
+        <pre><code>/volume1/ai-agent/
+  workspaces/
+    job-001/
+    job-002/
+  cache/
+    npm/
+    pnpm/
+    pip/
+  logs/</code></pre>
+      </div>
+      <p>
+        NAS는 외부 inbound 포트를 열지 않고 queue를 outbound polling합니다.
+        작업은 Docker 컨테이너 안에서 실행하고, 완료 후 workspace를 삭제하거나 짧게 보관합니다.
+      </p>
+    </section>
+
+    <section>
+      <h2>빌드와 테스트</h2>
+      <div class="grid">
+        <article class="card half">
+          <h3>NAS Worker</h3>
+          <ul class="list">
+            <li>관련 테스트</li>
+            <li>lint</li>
+            <li>typecheck</li>
+            <li>build smoke test</li>
+          </ul>
+        </article>
+        <article class="card half">
+          <h3>GitHub Actions</h3>
+          <ul class="list">
+            <li>full test</li>
+            <li>full build</li>
+            <li>e2e</li>
+            <li>deploy preview</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <h2>긴 세션 맥락 관리</h2>
+      <p>
+        Discord 스레드 전체를 매번 모델에 넣지 않습니다. 최근 메시지, running summary, pinned decisions,
+        current task state, 관련 파일, 필요한 로그만 조립해서 모델에 전달합니다.
+      </p>
+      <div class="flow">
+        <pre><code>Session State
+  - recent messages
+  - running summary
+  - pinned decisions
+  - current repo
+  - current branch
+  - task status
+  - inspected files
+  - proposed diff
+  - test results</code></pre>
+      </div>
+    </section>
+
+    <section>
+      <h2>MVP 순서</h2>
+      <table class="table">
+        <tbody>
+          <tr><td>1</td><td>Discord bot 기본 대화</td></tr>
+          <tr><td>2</td><td><code>/repo</code>, <code>/model</code>, <code>/agent</code> 설정</td></tr>
+          <tr><td>3</td><td>GitHub App 연동</td></tr>
+          <tr><td>4</td><td>NAS worker polling</td></tr>
+          <tr><td>5</td><td>repo clone + 파일 검색</td></tr>
+          <tr><td>6</td><td>diff 생성 + Discord 승인 버튼</td></tr>
+          <tr><td>7</td><td>branch push + PR 생성</td></tr>
+          <tr><td>8</td><td>GitHub Actions 상태 조회</td></tr>
+          <tr><td>9</td><td>Claude Code / Codex CLI agent 추가</td></tr>
+          <tr><td>10</td><td>토큰, 비용, rate limit 기반 fallback 추가</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <p class="footer">
+      이 문서는 Discord 자연어 코딩 에이전트를 Cloud Bot, Synology NAS Worker, GitHub PR 흐름으로 나누는 기준 설계안입니다.
+    </p>
+  </main>
+</body>
+</html>
