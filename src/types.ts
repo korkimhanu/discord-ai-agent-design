@@ -32,6 +32,9 @@ export type Job = {
   branch?: string;
   diff?: string;
   prUrl?: string;
+  progressMessageId?: string;
+  progressLabel?: string;
+  progressPercent?: number;
   error?: string;
   createdAt: string;
   updatedAt: string;

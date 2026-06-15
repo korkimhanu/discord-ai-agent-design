@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, TextChannel, ThreadChannel } from "discord.js";
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, Message, TextChannel, ThreadChannel } from "discord.js";
 import { AgentRouter } from "./agents.js";
 import { config } from "./config.js";
 import { collectRepoContext } from "./context.js";
@@ -53,16 +53,21 @@ export class Worker {
     const channel = await this.getChannel(job.threadId ?? job.channelId);
     const repoDir = this.jobDir(job);
     await this.store.updateJob(job.id, { status: "approved" });
+    await this.updateProgress(job, channel, 62, "승인됨. patch 적용 중");
 
     await fs.writeFile(path.join(repoDir, "agent.patch"), job.diff);
     assertOk(await run("git", ["apply", "--whitespace=fix", "agent.patch"], repoDir), "git apply");
+    await this.updateProgress(job, channel, 70, "로컬 체크 처리 중");
     await this.runProjectChecks(repoDir, channel);
+    await this.updateProgress(job, channel, 78, "커밋 생성 중");
     assertOk(await run("git", ["add", "-A"], repoDir), "git add");
     const diffCheck = await run("git", ["diff", "--cached", "--quiet"], repoDir);
     if (diffCheck.code === 0) throw new Error("Patch produced no changes");
     assertOk(await run("git", ["commit", "-m", `Apply AI agent changes (${job.id})`], repoDir), "git commit");
+    await this.updateProgress(job, channel, 86, "브랜치 push 중");
     assertOk(await run("git", ["push", "-u", "origin", job.branch], repoDir, 180_000), "git push");
 
+    await this.updateProgress(job, channel, 92, "PR 생성 중");
     const pr = await createPullRequest(
       job.repo,
       job.branch,
@@ -70,6 +75,7 @@ export class Worker {
       `Requested from Discord by <@${job.userId}>.\n\nPrompt:\n\n${job.prompt}`
     );
     const updated = await this.store.updateJob(job.id, { status: "pushed", prUrl: pr.url });
+    await this.updateProgress(updated, channel, 96, "PR 생성 완료. CI 확인 대기 중");
     await channel.send(`PR 생성 완료: ${pr.url}\nGitHub Actions 결과를 확인합니다. NAS에서는 LOCAL_CHECKS=${config.localChecks}로 처리했습니다.`);
     void this.reportCi(job, pr.headSha);
     return updated;
@@ -77,16 +83,28 @@ export class Worker {
 
   private async prepareDiff(job: Job): Promise<void> {
     const channel = await this.getChannel(job.threadId ?? job.channelId);
+    let currentJob = job;
     try {
       await this.store.updateJob(job.id, { status: "running" });
-      await channel.send(`작업 시작: \`${job.repo}\`를 가져와서 관련 파일을 확인합니다. job=${job.id}`);
+      const progress = await channel.send(progressContent(job, 5, "큐에서 작업 시작"));
+      currentJob = await this.store.updateJob(job.id, {
+        status: "running",
+        progressMessageId: progress.id,
+        progressLabel: "큐에서 작업 시작",
+        progressPercent: 5
+      });
       const repoDir = this.jobDir(job);
+      await this.updateProgress(currentJob, channel, 12, "workspace 준비 중");
       await fs.rm(repoDir, { recursive: true, force: true });
       await fs.mkdir(repoDir, { recursive: true });
+      await this.updateProgress(currentJob, channel, 22, "GitHub repo clone 중");
       await this.cloneRepo(job.repo, repoDir);
       const branch = `ai-agent/${job.id}`;
+      await this.updateProgress(currentJob, channel, 30, "작업 브랜치 생성 중");
       assertOk(await run("git", ["checkout", "-b", branch], repoDir), "git checkout");
+      await this.updateProgress(currentJob, channel, 38, "관련 파일 context 수집 중");
       const context = await collectRepoContext(repoDir, job.prompt);
+      await this.updateProgress(currentJob, channel, 48, `${job.agent} agent 실행 중`);
       const response = await this.agents.generateDiff({
         agent: job.agent,
         model: job.model,
@@ -95,6 +113,7 @@ export class Worker {
         prompt: job.prompt,
         repoContext: context
       });
+      await this.updateProgress(currentJob, channel, 56, "변경 diff 수집 중");
       const diff = response.mode === "worktree" ? await readWorktreeDiff(repoDir) : extractDiff(response.text);
       if (!diff) {
         const detail = response.text.trim().slice(0, 1200);
@@ -107,7 +126,8 @@ export class Worker {
       if (response.mode === "worktree") {
         await resetWorktree(repoDir);
       }
-      await this.store.updateJob(job.id, { status: "awaiting_approval", branch, diff });
+      currentJob = await this.store.updateJob(job.id, { status: "awaiting_approval", branch, diff });
+      await this.updateProgress(currentJob, channel, 60, "승인 대기 중");
       await channel.send({
         content: [
           `수정 diff를 만들었습니다. source=${response.source}, job=${job.id}`,
@@ -126,7 +146,8 @@ export class Worker {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      await this.store.updateJob(job.id, { status: "failed", error: message });
+      currentJob = await this.store.updateJob(job.id, { status: "failed", error: message });
+      await this.updateProgress(currentJob, channel, currentJob.progressPercent ?? 0, `실패: ${message.slice(0, 80)}`);
       await channel.send(`작업 실패: ${message}`);
     }
   }
@@ -166,6 +187,8 @@ export class Worker {
     const channel = await this.getChannel(job.threadId ?? job.channelId);
     try {
       const summary = await waitForCiSummary(job.repo, headSha, config.ciPollSeconds);
+      const latest = this.store.getJob(job.id) ?? job;
+      await this.updateProgress(latest, channel, summary.state === "success" ? 100 : 98, `CI 상태: ${summary.state}`);
       const checks = summary.checks.length ? summary.checks.slice(0, 10).join("\n") : "아직 check run이 없습니다.";
       const artifacts = summary.artifacts.length
         ? summary.artifacts
@@ -188,6 +211,19 @@ export class Worker {
       const message = error instanceof Error ? error.message : String(error);
       await channel.send(`CI 상태 확인 실패: ${message}`);
     }
+  }
+
+  private async updateProgress(job: Job, channel: Sendable, percent: number, label: string): Promise<Job> {
+    const updated = await this.store.updateJob(job.id, {
+      progressPercent: percent,
+      progressLabel: label
+    });
+    if (!updated.progressMessageId) return updated;
+    const message = await fetchMessage(channel, updated.progressMessageId);
+    if (message) {
+      await message.edit(progressContent(updated, percent, label)).catch(() => undefined);
+    }
+    return updated;
   }
 }
 
@@ -223,4 +259,21 @@ async function exists(file: string): Promise<boolean> {
     .access(file)
     .then(() => true)
     .catch(() => false);
+}
+
+function progressContent(job: Job, percent: number, label: string): string {
+  const safePercent = Math.max(0, Math.min(100, Math.round(percent)));
+  const filled = Math.round(safePercent / 10);
+  const bar = "█".repeat(filled) + "░".repeat(10 - filled);
+  return [
+    `작업 진행 중 job=${job.id}`,
+    `repo: \`${job.repo}\``,
+    `status: \`${job.status}\``,
+    `progress: [${bar}] ${safePercent}%`,
+    `step: ${label}`
+  ].join("\n");
+}
+
+async function fetchMessage(channel: Sendable, messageId: string): Promise<Message | undefined> {
+  return channel.messages.fetch(messageId).catch(() => undefined);
 }
