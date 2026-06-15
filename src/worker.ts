@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, Message, TextChannel, ThreadChannel } from "discord.js";
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, Message, TextChannel, ThreadChannel } from "discord.js";
 import { AgentRouter } from "./agents.js";
 import { config } from "./config.js";
 import { collectRepoContext } from "./context.js";
@@ -111,7 +111,7 @@ export class Worker {
     let currentJob = job;
     try {
       await this.store.updateJob(job.id, { status: "running" });
-      const progress = await channel.send(progressContent(job, 5, "큐에서 작업 시작"));
+      const progress = await channel.send(progressPayload(job, 5, "큐에서 작업 시작"));
       currentJob = await this.store.updateJob(job.id, {
         status: "running",
         progressMessageId: progress.id,
@@ -161,14 +161,18 @@ export class Worker {
       });
       await this.updateProgress(currentJob, channel, 60, "승인 대기 중");
       await channel.send({
-        content: [
-          `수정 diff를 만들었습니다. source=${response.source}, job=${job.id}`,
-          "적용 후 테스트/커밋/push/PR 생성을 진행하려면 승인하세요.",
-          "```diff",
-          diff.slice(0, 1800),
-          diff.length > 1800 ? "\n...diff truncated..." : "",
-          "```"
-        ].join("\n"),
+        embeds: [
+          new EmbedBuilder()
+            .setTitle("변경안 승인 대기")
+            .setColor(0x2563eb)
+            .addFields(
+              { name: "Job", value: `\`${job.id}\``, inline: true },
+              { name: "Source", value: `\`${response.source}\``, inline: true },
+              { name: "Repo", value: `\`${job.repo}\`` },
+              { name: "Diff Preview", value: `\`\`\`diff\n${diff.slice(0, 3200)}${diff.length > 3200 ? "\n...diff truncated..." : ""}\n\`\`\`` }
+            )
+            .setFooter({ text: "Apply and PR을 누르면 commit, push, PR 생성이 진행됩니다." })
+        ],
         components: [
           new ActionRowBuilder<ButtonBuilder>().addComponents(
             new ButtonBuilder().setCustomId(`approve:${job.id}`).setLabel("Apply and PR").setStyle(ButtonStyle.Success),
@@ -190,7 +194,7 @@ export class Worker {
     const channel = await this.getChannel(job.threadId ?? job.channelId);
     let currentJob = job;
     try {
-      const progress = await channel.send(progressContent(job, 5, "repo 분석 작업 시작"));
+      const progress = await channel.send(progressPayload(job, 5, "repo 분석 작업 시작"));
       currentJob = await this.store.updateJob(job.id, {
         status: "running",
         progressMessageId: progress.id,
@@ -297,7 +301,7 @@ export class Worker {
     if (!updated.progressMessageId) return updated;
     const message = await fetchMessage(channel, updated.progressMessageId);
     if (message) {
-      await message.edit(progressContent(updated, percent, label)).catch(() => undefined);
+      await message.edit(progressPayload(updated, percent, label)).catch(() => undefined);
     }
     return updated;
   }
@@ -403,17 +407,38 @@ async function exists(file: string): Promise<boolean> {
     .catch(() => false);
 }
 
-function progressContent(job: Job, percent: number, label: string): string {
+function progressPayload(job: Job, percent: number, label: string) {
   const safePercent = Math.max(0, Math.min(100, Math.round(percent)));
   const filled = Math.round(safePercent / 10);
   const bar = "█".repeat(filled) + "░".repeat(10 - filled);
-  return [
-    `작업 진행 중 job=${job.id}`,
-    `repo: \`${job.repo}\``,
-    `status: \`${job.status}\``,
-    `progress: [${bar}] ${safePercent}%`,
-    `step: ${label}`
-  ].join("\n");
+  const parsed = parseProgressLabel(label);
+  const color = job.status === "failed" ? 0xdc2626 : safePercent >= 100 ? 0x16a34a : 0x2563eb;
+  const embed = new EmbedBuilder()
+    .setTitle(job.status === "failed" ? "작업 실패" : safePercent >= 100 ? "작업 완료" : "작업 진행 중")
+    .setColor(color)
+    .addFields(
+      { name: "Progress", value: `\`${bar}\` ${safePercent}%` },
+      { name: "Step", value: parsed.step || "진행 중" },
+      { name: "Job", value: `\`${job.id}\``, inline: true },
+      { name: "Status", value: `\`${job.status}\``, inline: true },
+      { name: "Repo", value: `\`${job.repo}\`` }
+    )
+    .setTimestamp();
+  if (parsed.current) {
+    embed.addFields({ name: "Current", value: parsed.current });
+  }
+  if (parsed.elapsed) {
+    embed.addFields({ name: "Elapsed", value: parsed.elapsed, inline: true });
+  }
+  return { embeds: [embed] };
+}
+
+function parseProgressLabel(label: string): { step: string; current?: string; elapsed?: string } {
+  const lines = label.split("\n").map((line) => line.trim()).filter(Boolean);
+  const step = lines[0] ?? label;
+  const current = lines.find((line) => line.startsWith("현재 실행:") || line.startsWith("현재 작업:"))?.replace(/^현재 (실행|작업):\s*/, "");
+  const elapsed = lines.find((line) => line.startsWith("경과:"))?.replace(/^경과:\s*/, "");
+  return { step, current, elapsed };
 }
 
 async function fetchMessage(channel: Sendable, messageId: string): Promise<Message | undefined> {
