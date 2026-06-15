@@ -14,6 +14,7 @@ export type AgentRequest = {
 export type AgentResponse = {
   text: string;
   source: string;
+  mode: "diff" | "worktree";
 };
 
 export class AgentRouter {
@@ -31,29 +32,39 @@ export class AgentRouter {
       system: request.system,
       prompt: `USER REQUEST\n${request.prompt}\n\nREPOSITORY CONTEXT\n${request.repoContext}`
     });
-    return { text: response.text, source: `${response.provider}:${response.model}` };
+    return { text: response.text, source: `${response.provider}:${response.model}`, mode: "diff" };
   }
 
   private async runClaudeCode(request: AgentRequest): Promise<AgentResponse> {
     const prompt = makeCliPrompt(request);
     const result = await run(config.claudeCodeCommand, ["-p"], request.repoDir, 600_000, { input: prompt });
     if (result.code !== 0) throw new Error(`claude-code failed\n${result.stderr || result.stdout}`);
-    return { text: result.stdout, source: "claude-code" };
+    return { text: result.stdout, source: "claude-code", mode: "worktree" };
   }
 
   private async runCodex(request: AgentRequest): Promise<AgentResponse> {
     const prompt = makeCliPrompt(request);
-    const result = await run(config.codexCommand, ["exec", "-"], request.repoDir, 600_000, { input: prompt });
+    const result = await run(
+      config.codexCommand,
+      ["exec", "--sandbox", "workspace-write", "-"],
+      request.repoDir,
+      600_000,
+      { input: prompt }
+    );
     if (result.code !== 0) throw new Error(`codex failed\n${result.stderr || result.stdout}`);
-    return { text: result.stdout, source: "codex" };
+    return { text: result.stdout, source: "codex", mode: "worktree" };
   }
 }
 
 function makeCliPrompt(request: AgentRequest): string {
   return [
-    request.system,
+    "You are a coding agent working in a temporary git checkout.",
+    "Edit files directly to satisfy the user request.",
+    "Keep changes minimal and related to the request.",
+    "Do not commit, push, install dependencies, or run destructive commands.",
+    "When done, briefly summarize what changed.",
     "",
-    "Return only a unified git diff. Do not edit files directly.",
+    request.system,
     "",
     "USER REQUEST",
     request.prompt,

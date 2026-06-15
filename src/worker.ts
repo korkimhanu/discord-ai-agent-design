@@ -95,8 +95,18 @@ export class Worker {
         prompt: job.prompt,
         repoContext: context
       });
-      const diff = extractDiff(response.text);
-      if (!diff) throw new Error("Model did not return a unified diff");
+      const diff = response.mode === "worktree" ? await readWorktreeDiff(repoDir) : extractDiff(response.text);
+      if (!diff) {
+        const detail = response.text.trim().slice(0, 1200);
+        throw new Error(
+          response.mode === "worktree"
+            ? `Agent finished but did not modify files.${detail ? `\n\nAgent output:\n${detail}` : ""}`
+            : `Model did not return a unified diff.${detail ? `\n\nModel output:\n${detail}` : ""}`
+        );
+      }
+      if (response.mode === "worktree") {
+        await resetWorktree(repoDir);
+      }
       await this.store.updateJob(job.id, { status: "awaiting_approval", branch, diff });
       await channel.send({
         content: [
@@ -196,6 +206,16 @@ function extractDiff(text: string): string {
   const raw = (fenced ? fenced[1] : text).trim();
   const start = raw.search(/^diff --git |^--- /m);
   return start >= 0 ? raw.slice(start).trim() : "";
+}
+
+async function readWorktreeDiff(repoDir: string): Promise<string> {
+  const result = await run("git", ["diff", "--no-ext-diff", "--binary"], repoDir);
+  return result.code === 0 ? result.stdout.trim() : "";
+}
+
+async function resetWorktree(repoDir: string): Promise<void> {
+  await run("git", ["checkout", "--", "."], repoDir);
+  await run("git", ["clean", "-fd"], repoDir);
 }
 
 async function exists(file: string): Promise<boolean> {
